@@ -36,45 +36,39 @@ object GlueHudiReadWriteExample {
     val sparkImplicits = spark.implicits
     import sparkImplicits._
 
+    // Step 1: build a dataframe with 2 user records, then write as
+    // hudi format, but won't create table in glue catalog
     val users1 = Seq(
       User(1, "Tom", 24, System.currentTimeMillis()),
       User(2, "Bill", 32, System.currentTimeMillis())
     )
     val dataframe1 = users1.toDF
-
-    // save 2 user records into hudi, but won't create table in glue catalog
     saveUserAsHudiWithoutHiveTableSync(dataframe1)
 
+    // Step 2: read just saved hudi dataset, and print each records
     val dataframe2 = readUserFromHudi()
-
     val users2 = dataframe2.as[User].collect().toSeq
-
     println("printing user records in dataframe2...")
-
     users2.foreach(println(_))
 
-    val users3 = users2 :+
-      User(2, "Bill", 33, System.currentTimeMillis()) :+
-      User(3, "Rose", 45, System.currentTimeMillis())
-
-    val dataframe3 = users3.toDF
-
-    // append 2 new user records, one is updating Bill's age from 32 to 33,
+    // Step 3: append 2 new user records, one is updating Bill's age from 32 to 33,
     // the other is a new user whose name is 'Rose'. This time, we will enable
     // hudi hive syncing function, and a table named `user` will be created on
     // default database, this action is done by hudi automatically based on
     // the metadata of hudi user dataset.
+    val users3 = users2 ++ Seq(
+      User(2, "Bill", 33, System.currentTimeMillis()),
+      User(3, "Rose", 45, System.currentTimeMillis())
+    )
+    val dataframe3 = users3.toDF
     saveUserAsHudiWithHiveTableSync(dataframe3)
 
-    // since a table is created automatically, now, we can query user table immediately.
-    val dataframe4 = spark.sql("select * from user")
-
-    val users4 = dataframe4.as[User].collect().toSeq
-
-    // the printed messages show:
+    // Step 4: since a table is created automatically, now, we can query user table
+    // immediately, and print returned user records, printed messages should show:
     // Bill's is updated, Rose's record is inserted, this demoed UPSERT feature of hudi!
+    val dataframe4 = spark.sql("select * from user")
+    val users4 = dataframe4.as[User].collect().toSeq
     println("printing user records in dataframe4...")
-
     users4.foreach(println(_))
 
     commit()
@@ -94,6 +88,7 @@ object GlueHudiReadWriteExample {
     userTablePath = s"s3://$bucketName/$userTableName"
     println(s"userTablePath=$userTablePath")
     val conf = new SparkConf()
+    // This is required for hudi
     conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
     val sparkContext = new SparkContext(conf)
     val glueContext = new GlueContext(sparkContext)
@@ -109,15 +104,16 @@ object GlueHudiReadWriteExample {
   }
 
   /**
-   * Read 
-   * @return
+   * Read user records from Hudi, and return a dataframe.
+   *
+   * @return The dataframe of user records
    */
   def readUserFromHudi(): DataFrame = {
     spark
       .read
       .format("hudi")
       .option(DataSourceReadOptions.QUERY_TYPE_OPT_KEY, DataSourceReadOptions.QUERY_TYPE_SNAPSHOT_OPT_VAL)
-      .load(userTablePath) // For incremental query, pass in the root/base path of table
+      .load(userTablePath)
   }
 
   /**
@@ -134,8 +130,7 @@ object GlueHudiReadWriteExample {
       DataSourceWriteOptions.TABLE_TYPE_OPT_KEY -> DataSourceWriteOptions.COW_TABLE_TYPE_OPT_VAL,
       DataSourceWriteOptions.RECORDKEY_FIELD_OPT_KEY -> userRecordKeyField,
       DataSourceWriteOptions.PRECOMBINE_FIELD_OPT_KEY -> userPrecombineField,
-      DataSourceWriteOptions.KEYGENERATOR_CLASS_OPT_KEY -> classOf[NonpartitionedKeyGenerator].getName,
-      DataSourceWriteOptions.HIVE_PARTITION_EXTRACTOR_CLASS_OPT_KEY -> classOf[NonPartitionedExtractor].getName
+      DataSourceWriteOptions.KEYGENERATOR_CLASS_OPT_KEY -> classOf[NonpartitionedKeyGenerator].getName
     )
 
     dataframe
